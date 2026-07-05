@@ -49,14 +49,18 @@ const INCIDENT_BASE_URL = "https://api.atlas-systems.uk/blackbox/incidents";
  */
 export function trimTelemetry(raw) {
   if (!raw || typeof raw !== "object") return { fetched_ok: false };
-  const gpu = raw.gpu || {};
-  const cpu = raw.cpu || {};
-  const ram = raw.ram || {};
-  const ollama = raw.ollama || {};
+  const source = raw.telemetry && typeof raw.telemetry === "object" ? raw.telemetry : raw;
+  const gpu = source.gpu || {};
+  const cpu = source.cpu || {};
+  const ram = source.ram || {};
+  const ollama = source.ollama || {};
   return {
     fetched_ok: true,
     online: raw.online !== false,
+    sampled_at: typeof source.sampled_at === "string" ? source.sampled_at : null,
+    last_seen: typeof raw.last_seen === "string" ? raw.last_seen : null,
     gpu: {
+      name: typeof gpu.name === "string" ? gpu.name : "",
       utilisation_pct: numOrNull(gpu.utilisation_pct),
       temperature_c: numOrNull(gpu.temperature_c),
       vram_used_mb: numOrNull(gpu.vram_used_mb),
@@ -71,7 +75,10 @@ export function trimTelemetry(raw) {
     ollama: {
       reachable: ollama.reachable === true,
       loaded: Array.isArray(ollama.loaded)
-        ? ollama.loaded.map((m) => m && m.name).filter(Boolean).slice(0, 6)
+        ? ollama.loaded
+          .map((m) => (typeof m === "string" ? m : m && m.name))
+          .filter(Boolean)
+          .slice(0, 6)
         : [],
     },
   };
@@ -217,6 +224,25 @@ export class Recorder {
     }
   }
 
+  insertFrame(frame) {
+    this.sql.exec(
+      "INSERT INTO frames (ts, telemetry, events) VALUES (?, ?, ?) ON CONFLICT(ts) DO NOTHING",
+      frame.ts, JSON.stringify(frame.telemetry), JSON.stringify(frame.events || []),
+    );
+    this.sql.exec("DELETE FROM frames WHERE ts < ?", frame.ts - BUFFER_MS);
+  }
+
+  async sampleTelemetryFrame(now) {
+    const rawTelemetry = await this.fetchJson(TELEMETRY_URL);
+    const frame = {
+      ts: now,
+      telemetry: trimTelemetry(rawTelemetry),
+      events: [],
+    };
+    this.insertFrame(frame);
+    return frame;
+  }
+
   async tick(now) {
     /* 1 :: telemetry, via the edge Worker. Its last-known-good KV cache
        is a feature here: when the box is off, the recorder still gets an
@@ -234,11 +260,7 @@ export class Recorder {
 
     /* 3 :: the frame, then the prune that makes the buffer a buffer. */
     const frame = { ts: now, telemetry, events: fresh };
-    this.sql.exec(
-      "INSERT INTO frames (ts, telemetry, events) VALUES (?, ?, ?) ON CONFLICT(ts) DO NOTHING",
-      now, JSON.stringify(telemetry), JSON.stringify(fresh),
-    );
-    this.sql.exec("DELETE FROM frames WHERE ts < ?", now - BUFFER_MS);
+    this.insertFrame(frame);
 
     /* 4 :: aftermath. An open incident absorbs this frame; the replay
        shows the fall as well as the hit. */
@@ -396,9 +418,7 @@ export class Recorder {
       let body = {};
       try { body = await request.json(); } catch { /* optional */ }
       const now = Date.now();
-      if (this.sql.exec("SELECT COUNT(*) AS n FROM frames").toArray()[0].n === 0) {
-        await this.tick(now - 1); /* an empty box has nothing to preserve */
-      }
+      await this.sampleTelemetryFrame(now - 1);
       this.captureIncident(now, {
         ts: new Date(now).toISOString(),
         level: "failure",
