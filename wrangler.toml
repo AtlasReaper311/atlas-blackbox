@@ -1,0 +1,35 @@
+# atlas-blackbox :: the estate's flight recorder.
+name = "atlas-blackbox"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+# Literal zone_id, never zone_name: scoped CI tokens cannot do the
+# account-level name lookup, and the failure reads like a routing bug.
+routes = [
+  { pattern = "api.atlas-systems.uk/blackbox*", zone_id = "8ba6350a78c988447c111048b125f917" }
+]
+
+# The recorder state lives in one SQLite-backed Durable Object. SQLite,
+# not KV: a per-minute append is the workload the estate's conditional-
+# KV-write rule exists to keep out of KV.
+[[durable_objects.bindings]]
+name = "RECORDER"
+class_name = "Recorder"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Recorder"]
+
+# Watchdog only. The 60s heartbeat is the DO's own alarm; this cron just
+# re-arms it if a deploy or migration ever leaves it dark.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Runtime alerts ride the estate envelope over the service binding.
+[[services]]
+binding = "ATLAS_NOTIFY"
+service = "atlas-notify"
+
+# Secrets, set at the interactive prompt only:
+#   wrangler secret put NOTIFY_TOKEN     (shared with atlas-notify)
+#   wrangler secret put BLACKBOX_TOKEN   (gates POST /blackbox/test-incident)

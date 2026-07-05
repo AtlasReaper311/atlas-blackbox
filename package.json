@@ -1,0 +1,6 @@
+{
+  "name": "atlas-blackbox",
+  "private": true,
+  "type": "module",
+  "description": "Flight recorder for the Atlas Systems estate: rolling buffer in, permanent incident snapshots out."
+}
