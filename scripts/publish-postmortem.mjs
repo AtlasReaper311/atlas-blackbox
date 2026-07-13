@@ -28,7 +28,7 @@ function escapeHtml(s) {
  
 function renderInline(text) {
   let out = escapeHtml(text);
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, label, url) => `<a href="${url}">${label}</a>`);
+  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => `<a href="${url}">${label}</a>`);
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
   return out;

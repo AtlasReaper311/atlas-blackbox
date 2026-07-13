@@ -60,7 +60,7 @@ function withPostmortemFlag(incidentSummary, manifest) {
 export { Recorder };
  
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS });

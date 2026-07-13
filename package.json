@@ -2,5 +2,13 @@
   "name": "atlas-blackbox",
   "private": true,
   "type": "module",
-  "description": "Flight recorder for the Atlas Systems estate: rolling buffer in, permanent incident snapshots out."
+  "description": "Flight recorder for the Atlas Systems estate: rolling buffer in, permanent incident snapshots out.",
+  "scripts": {
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0"
+  }
 }
