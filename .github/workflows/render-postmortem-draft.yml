@@ -1,0 +1,55 @@
+name: Render postmortem draft
+ 
+on:
+  pull_request:
+    paths:
+      - "drafts/**"
+ 
+permissions:
+  contents: write
+ 
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+ 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+ 
+      - name: Install dependencies
+        run: npm ci
+ 
+      - name: Find changed drafts
+        id: changed
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          FILES=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD -- 'drafts/*.md')
+          echo "files<<PMEOF" >> "$GITHUB_OUTPUT"
+          echo "$FILES" >> "$GITHUB_OUTPUT"
+          echo "PMEOF" >> "$GITHUB_OUTPUT"
+ 
+      - name: Render each changed draft
+        if: steps.changed.outputs.files != ''
+        run: |
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            echo "Rendering $file"
+            node scripts/render-draft.mjs "$file"
+          done <<< "${{ steps.changed.outputs.files }}"
+ 
+      - name: Commit rendered output, only if anything actually changed
+        run: |
+          git config user.name "atlas-blackbox-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add postmortems/
+          if git diff --cached --quiet; then
+            echo "Nothing to commit, converter output already up to date."
+          else
+            git commit -m "Auto-render postmortem draft [skip ci]"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
