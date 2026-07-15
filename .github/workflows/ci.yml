@@ -1,0 +1,60 @@
+name: Pull request CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker-validation:
+    name: Offline Worker validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install declared dependencies
+        run: npm ci
+
+      - name: Lint and parse Worker modules
+        run: |
+          npm run lint
+          node --check src/_meta.js
+          node --check src/index.js
+          node --check src/notify.js
+          node --check src/recorder.js
+
+      - name: Validate Worker configuration and postmortem manifest
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import tomllib
+          from pathlib import Path
+
+          with Path("wrangler.toml").open("rb") as handle:
+              config = tomllib.load(handle)
+          if config.get("name") != "atlas-blackbox" or config.get("main") != "src/index.js":
+              raise SystemExit("wrangler.toml does not identify the atlas-blackbox entry point")
+          durable = config.get("durable_objects", {}).get("bindings", [])
+          if not any(item.get("name") == "RECORDER" and item.get("class_name") == "Recorder" for item in durable):
+              raise SystemExit("RECORDER Durable Object binding is missing or malformed")
+          routes = config.get("routes", [])
+          if not routes or not all(re.fullmatch(r"[0-9a-f]{32}", item.get("zone_id", "")) for item in routes):
+              raise SystemExit("Worker routes require literal 32-character zone IDs")
+          manifest = json.loads(Path("postmortems/manifest.json").read_text(encoding="utf-8"))
+          if not isinstance(manifest, dict):
+              raise SystemExit("postmortems/manifest.json must be a JSON object")
+          PY
