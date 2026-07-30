@@ -9,7 +9,7 @@ import process from "node:process";
 const ROOT = resolve(import.meta.dirname, "..");
 const MANIFEST_PATH = resolve(ROOT, "postmortems", "manifest.json");
 const BASE_URL = (process.env.BLACKBOX_PUBLIC_BASE_URL || "https://api.atlas-systems.uk/blackbox").replace(/\/$/, "");
-const EXPECTED_VERSION = process.env.EXPECTED_BLACKBOX_VERSION || "1.0.1";
+const EXPECTED_VERSION = process.env.EXPECTED_BLACKBOX_VERSION || "1.0.2";
 const ATTEMPTS = Number.parseInt(process.env.BLACKBOX_VERIFY_ATTEMPTS || "30", 10);
 const DELAY_MS = Number.parseInt(process.env.BLACKBOX_VERIFY_DELAY_MS || "10000", 10);
 const VALIDATE_ONLY = process.argv.includes("--validate-only");
@@ -45,8 +45,14 @@ async function loadLocalContract() {
   return { manifest, entries };
 }
 
-async function fetchJson(path) {
-  const response = await fetch(`${BASE_URL}${path}`, {
+function verificationUrl(path, attempt) {
+  const separator = path.includes("?") ? "&" : "?";
+  const token = encodeURIComponent(`${EXPECTED_VERSION}-${attempt}`);
+  return `${BASE_URL}${path}${separator}atlas_verify=${token}`;
+}
+
+async function fetchJson(path, attempt) {
+  const response = await fetch(verificationUrl(path, attempt), {
     headers: {
       Accept: "application/json",
       "Cache-Control": "no-cache",
@@ -73,8 +79,8 @@ function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-async function verifyProduction(_manifest, entries) {
-  const health = await fetchJson("/health");
+async function verifyProduction(_manifest, entries, attempt) {
+  const health = await fetchJson("/health", attempt);
   assert(health.ok === true, "health response is not ok");
   assert(health.name === "atlas-blackbox", `unexpected health service ${health.name}`);
   assert(health.version === EXPECTED_VERSION, `expected version ${EXPECTED_VERSION}, received ${health.version}`);
@@ -84,21 +90,28 @@ async function verifyProduction(_manifest, entries) {
     `health reports ${health.publishedPostmortemCount} published postmortems, expected at least ${entries.length}`
   );
 
+  const healthWithSlash = await fetchJson("/health/", attempt);
+  assert(healthWithSlash.version === EXPECTED_VERSION, "trailing-slash health route is not normalised");
+
   for (const [id, entry] of entries) {
-    const detail = await fetchJson(`/incidents/${encodeURIComponent(id)}`);
+    const detail = await fetchJson(`/incidents/${encodeURIComponent(id)}`, attempt);
     assert(detail.ok === true, `${id} detail response is not ok`);
     assert(detail.id === id, `${id} detail returned incident ${detail.id}`);
     assert(detail.postmortemAssetsAvailable === true, `${id} detail reports unavailable postmortem assets`);
     assert(detail.hasPostmortem === true, `${id} detail reports hasPostmortem=false`);
     assert(detail.postmortemTitle === entry.title, `${id} detail title does not match manifest`);
+    assert(detail.postmortemPublishedAt === entry.publishedAt, `${id} detail publishedAt does not match manifest`);
 
-    const published = await fetchJson(`/incidents/${encodeURIComponent(id)}/postmortem`);
+    const published = await fetchJson(`/incidents/${encodeURIComponent(id)}/postmortem`, attempt);
     assert(published.ok === true, `${id} postmortem response is not ok`);
     assert(published.id === id, `${id} postmortem returned incident ${published.id}`);
     assert(published.title === entry.title, `${id} postmortem title does not match manifest`);
     assert(published.sealed === entry.sealed, `${id} postmortem sealed time does not match manifest`);
     assert(published.publishedAt === entry.publishedAt, `${id} postmortem publishedAt does not match manifest`);
     assert(typeof published.html === "string" && published.html.trim(), `${id} postmortem HTML is empty`);
+
+    const publishedWithSlash = await fetchJson(`/incidents/${encodeURIComponent(id)}/postmortem/`, attempt);
+    assert(publishedWithSlash.id === id, `${id} trailing-slash postmortem route is not normalised`);
   }
 }
 
@@ -118,7 +131,7 @@ async function main() {
   let lastError = null;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     try {
-      await verifyProduction(manifest, entries);
+      await verifyProduction(manifest, entries, attempt);
       console.log(`verified ${entries.length} published postmortem(s) at ${BASE_URL}`);
       return;
     } catch (error) {

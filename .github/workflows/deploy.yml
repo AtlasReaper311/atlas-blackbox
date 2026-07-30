@@ -38,5 +38,5 @@ jobs:
 
       - name: Verify committed postmortems are live
         env:
-          EXPECTED_BLACKBOX_VERSION: "1.0.1"
+          EXPECTED_BLACKBOX_VERSION: "1.0.2"
         run: node scripts/verify-published-postmortems.mjs

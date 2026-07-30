@@ -1,10 +1,10 @@
 import { handleMeta } from "./_meta.js";
 import { Recorder } from "./recorder.js";
- 
+
 const META = {
   name: "atlas-blackbox",
   description: "Flight recorder for the estate: a rolling 10-minute buffer of telemetry and events, snapshotted permanently when a failure lands",
-  version: "1.0.1",
+  version: "1.0.2",
   endpoints: [
     { method: "GET", path: "/blackbox/incidents", description: "Recorded incidents, newest first" },
     { method: "GET", path: "/blackbox/incidents/:id", description: "One incident: triggers plus the full frame window" },
@@ -15,29 +15,29 @@ const META = {
   ],
   source: "https://github.com/AtlasReaper311/atlas-blackbox"
 };
- 
+
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "authorization, content-type"
 };
- 
+
 function json(data, { status = 200, cacheControl = "no-store" } = {}) {
   return Response.json(data, {
     status,
     headers: { ...CORS, "cache-control": cacheControl }
   });
 }
- 
+
 function recorder(env) {
   return env.RECORDER.get(env.RECORDER.idFromName("main"));
 }
- 
+
 function unavailablePostmortemManifest(error) {
   console.error(`[atlas-blackbox] postmortem assets unavailable: ${error}`);
   return { available: false, entries: {}, error };
 }
- 
+
 // Postmortems are published by committing a converted HTML fragment plus a
 // manifest entry into ./postmortems (see scripts/publish-postmortem.mjs).
 // The manifest is the only thing checked at request time, it carries the
@@ -47,35 +47,47 @@ async function loadPostmortemManifest(env) {
   if (!env.POSTMORTEM_ASSETS || typeof env.POSTMORTEM_ASSETS.fetch !== "function") {
     return unavailablePostmortemManifest("POSTMORTEM_ASSETS binding is missing");
   }
- 
+
   try {
     const res = await env.POSTMORTEM_ASSETS.fetch("https://assets.local/manifest.json");
     if (!res.ok) {
       return unavailablePostmortemManifest(`manifest fetch returned HTTP ${res.status}`);
     }
- 
+
     const entries = await res.json();
     if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
       return unavailablePostmortemManifest("manifest payload is not a JSON object");
     }
- 
+
     return { available: true, entries, error: null };
   } catch (error) {
     return unavailablePostmortemManifest(error instanceof Error ? error.message : String(error));
   }
 }
- 
+
 function withPostmortemFlag(incidentSummary, manifest) {
   const entry = manifest.entries[incidentSummary.id];
   return {
     ...incidentSummary,
     hasPostmortem: Boolean(entry),
-    postmortemTitle: entry ? entry.title : null
+    postmortemTitle: entry ? entry.title : null,
+    postmortemPublishedAt: entry ? entry.publishedAt : null
   };
 }
- 
+
+function normalisePath(pathname) {
+  let path = pathname;
+  if (path === "/blackbox") {
+    path = "/";
+  } else if (path.startsWith("/blackbox/")) {
+    path = path.slice("/blackbox".length);
+  }
+  if (path.length > 1) path = path.replace(/\/+$/, "");
+  return path || "/";
+}
+
 export { Recorder };
- 
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -84,10 +96,9 @@ export default {
     }
     const meta = handleMeta(url, META);
     if (meta) return meta;
- 
-    let path = url.pathname;
-    if (path.startsWith("/blackbox")) path = path.slice("/blackbox".length) || "/";
- 
+
+    const path = normalisePath(url.pathname);
+
     if (path === "/health") {
       const manifest = await loadPostmortemManifest(env);
       return json({
@@ -98,12 +109,12 @@ export default {
         publishedPostmortemCount: Object.keys(manifest.entries).length
       });
     }
- 
+
     if (path === "/status" && request.method === "GET") {
       const res = await recorder(env).fetch("https://do/internal/status");
       return json(await res.json(), { cacheControl: "public, max-age=15" });
     }
- 
+
     if (path === "/incidents" && request.method === "GET") {
       const res = await recorder(env).fetch("https://do/internal/incidents");
       const body = await res.json();
@@ -112,9 +123,9 @@ export default {
         body.postmortemAssetsAvailable = manifest.available;
         body.incidents = body.incidents.map((inc) => withPostmortemFlag(inc, manifest));
       }
-      return json(body, { cacheControl: "public, max-age=30" });
+      return json(body, { cacheControl: "public, max-age=15, must-revalidate" });
     }
- 
+
     const detail = path.match(/^\/incidents\/([a-zA-Z0-9-]+)$/);
     if (detail && request.method === "GET") {
       const res = await recorder(env).fetch(`https://do/internal/incidents/${detail[1]}`);
@@ -125,11 +136,10 @@ export default {
       body.postmortemAssetsAvailable = manifest.available;
       body.hasPostmortem = Boolean(entry);
       body.postmortemTitle = entry ? entry.title : null;
-      return json(body, {
-        cacheControl: body.sealed ? "public, max-age=3600" : "public, max-age=15"
-      });
+      body.postmortemPublishedAt = entry ? entry.publishedAt : null;
+      return json(body, { cacheControl: "public, max-age=15, must-revalidate" });
     }
- 
+
     const postmortem = path.match(/^\/incidents\/([a-zA-Z0-9-]+)\/postmortem$/);
     if (postmortem && request.method === "GET") {
       const id = postmortem[1];
@@ -137,7 +147,7 @@ export default {
       if (!manifest.available) {
         return json({ ok: false, error: "postmortem assets unavailable" }, { status: 503 });
       }
- 
+
       const entry = manifest.entries[id];
       if (!entry) {
         return json({ ok: false, error: "no postmortem published for this incident" }, { status: 404 });
@@ -152,7 +162,7 @@ export default {
         { cacheControl: "public, max-age=3600" }
       );
     }
- 
+
     if (path === "/test-incident" && request.method === "POST") {
       const auth = request.headers.get("authorization") || "";
       if (!env.BLACKBOX_TOKEN || auth !== `Bearer ${env.BLACKBOX_TOKEN}`) {
@@ -165,10 +175,10 @@ export default {
       });
       return json(await res.json(), { status: res.status });
     }
- 
+
     return json({ ok: false, error: "no such route; see /blackbox/_meta" }, { status: 404 });
   },
- 
+
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(recorder(env).fetch("https://do/internal/ensure-alarm", { method: "POST" }));
   }
