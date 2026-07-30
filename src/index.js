@@ -4,13 +4,13 @@ import { Recorder } from "./recorder.js";
 const META = {
   name: "atlas-blackbox",
   description: "Flight recorder for the estate: a rolling 10-minute buffer of telemetry and events, snapshotted permanently when a failure lands",
-  version: "1.0.0",
+  version: "1.0.1",
   endpoints: [
     { method: "GET", path: "/blackbox/incidents", description: "Recorded incidents, newest first" },
     { method: "GET", path: "/blackbox/incidents/:id", description: "One incident: triggers plus the full frame window" },
     { method: "GET", path: "/blackbox/incidents/:id/postmortem", description: "Published postmortem for one incident, if reviewed and published" },
     { method: "GET", path: "/blackbox/status", description: "Recorder heartbeat: buffer depth, last tick, alarm state" },
-    { method: "GET", path: "/blackbox/health", description: "Liveness" },
+    { method: "GET", path: "/blackbox/health", description: "Liveness and postmortem asset availability" },
     { method: "POST", path: "/blackbox/test-incident", description: "Ground test; Bearer BLACKBOX_TOKEN" }
   ],
   source: "https://github.com/AtlasReaper311/atlas-blackbox"
@@ -33,23 +33,40 @@ function recorder(env) {
   return env.RECORDER.get(env.RECORDER.idFromName("main"));
 }
  
+function unavailablePostmortemManifest(error) {
+  console.error(`[atlas-blackbox] postmortem assets unavailable: ${error}`);
+  return { available: false, entries: {}, error };
+}
+ 
 // Postmortems are published by committing a converted HTML fragment plus a
 // manifest entry into ./postmortems (see scripts/publish-postmortem.mjs).
 // The manifest is the only thing checked at request time, it carries the
 // title too, so the Lab panel never needs a second round trip just to
 // label the link.
 async function loadPostmortemManifest(env) {
+  if (!env.POSTMORTEM_ASSETS || typeof env.POSTMORTEM_ASSETS.fetch !== "function") {
+    return unavailablePostmortemManifest("POSTMORTEM_ASSETS binding is missing");
+  }
+ 
   try {
     const res = await env.POSTMORTEM_ASSETS.fetch("https://assets.local/manifest.json");
-    if (!res.ok) return {};
-    return await res.json();
-  } catch {
-    return {};
+    if (!res.ok) {
+      return unavailablePostmortemManifest(`manifest fetch returned HTTP ${res.status}`);
+    }
+ 
+    const entries = await res.json();
+    if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+      return unavailablePostmortemManifest("manifest payload is not a JSON object");
+    }
+ 
+    return { available: true, entries, error: null };
+  } catch (error) {
+    return unavailablePostmortemManifest(error instanceof Error ? error.message : String(error));
   }
 }
  
 function withPostmortemFlag(incidentSummary, manifest) {
-  const entry = manifest[incidentSummary.id];
+  const entry = manifest.entries[incidentSummary.id];
   return {
     ...incidentSummary,
     hasPostmortem: Boolean(entry),
@@ -72,7 +89,14 @@ export default {
     if (path.startsWith("/blackbox")) path = path.slice("/blackbox".length) || "/";
  
     if (path === "/health") {
-      return json({ ok: true, name: META.name, version: META.version });
+      const manifest = await loadPostmortemManifest(env);
+      return json({
+        ok: true,
+        name: META.name,
+        version: META.version,
+        postmortemAssetsAvailable: manifest.available,
+        publishedPostmortemCount: Object.keys(manifest.entries).length
+      });
     }
  
     if (path === "/status" && request.method === "GET") {
@@ -85,6 +109,7 @@ export default {
       const body = await res.json();
       if (body.ok) {
         const manifest = await loadPostmortemManifest(env);
+        body.postmortemAssetsAvailable = manifest.available;
         body.incidents = body.incidents.map((inc) => withPostmortemFlag(inc, manifest));
       }
       return json(body, { cacheControl: "public, max-age=30" });
@@ -96,7 +121,8 @@ export default {
       const body = await res.json();
       if (!body.ok) return json(body, { status: res.status });
       const manifest = await loadPostmortemManifest(env);
-      const entry = manifest[body.id];
+      const entry = manifest.entries[body.id];
+      body.postmortemAssetsAvailable = manifest.available;
       body.hasPostmortem = Boolean(entry);
       body.postmortemTitle = entry ? entry.title : null;
       return json(body, {
@@ -108,7 +134,11 @@ export default {
     if (postmortem && request.method === "GET") {
       const id = postmortem[1];
       const manifest = await loadPostmortemManifest(env);
-      const entry = manifest[id];
+      if (!manifest.available) {
+        return json({ ok: false, error: "postmortem assets unavailable" }, { status: 503 });
+      }
+ 
+      const entry = manifest.entries[id];
       if (!entry) {
         return json({ ok: false, error: "no postmortem published for this incident" }, { status: 404 });
       }

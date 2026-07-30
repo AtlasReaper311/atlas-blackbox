@@ -35,6 +35,7 @@ jobs:
           node --check src/index.js
           node --check src/notify.js
           node --check src/recorder.js
+          node --check scripts/verify-published-postmortems.mjs
 
       - name: Validate Worker configuration and postmortem manifest
         run: |
@@ -58,6 +59,7 @@ jobs:
           if not isinstance(manifest, dict):
               raise SystemExit("postmortems/manifest.json must be a JSON object")
           PY
+          node scripts/verify-published-postmortems.mjs --validate-only
 
       - name: Build exact Wrangler deployment candidate
         run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/wrangler-dry-run"
