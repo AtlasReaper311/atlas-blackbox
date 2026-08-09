@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Flight recorder for the Atlas Systems estate: rolling buffer in, permanent incident snapshots out.",
   "scripts": {
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "node --test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
