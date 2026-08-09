@@ -37,6 +37,9 @@ jobs:
           node --check src/recorder.js
           node --check scripts/verify-published-postmortems.mjs
 
+      - name: Run offline Worker regression suite
+        run: npm test
+
       - name: Validate Worker configuration and postmortem manifest
         run: |
           python3 - <<'PY'

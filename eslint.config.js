@@ -23,7 +23,9 @@ export default [
     // the Worker itself. The canonical block above is scoped to **/*.js,
     // so it never reaches these; without this block, no-undef would fail
     // on plain Node globals like process, since nothing declares them.
-    files: ["scripts/**/*.mjs"],
+    // Offline regression tests run under Node's built-in test runner and
+    // need the same Node globals as the publish/verify CLI scripts.
+    files: ["scripts/**/*.mjs", "test/**/*.js"],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: "module",
