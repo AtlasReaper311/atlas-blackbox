@@ -1,2 +1,4 @@
 .wrangler/
 *.bak
+
+.DS_Store
