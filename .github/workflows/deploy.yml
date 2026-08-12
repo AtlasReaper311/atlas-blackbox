@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   deploy:
-    uses: AtlasReaper311/atlas-infra/.github/workflows/deploy-worker.yml@f971172dc258c93dffa53b8b7a3532c5be55883d # atlas-infra W3 Worker contract enforcement
+    uses: AtlasReaper311/atlas-infra/.github/workflows/deploy-worker.yml@4df8b619700d52ae46142a9f0c8b7e0fc50b24fd # atlas-infra Gardener batch two and Wrangler pin input
     with:
       worker_name: atlas-blackbox
       wrangler_version: "4.120.0"
