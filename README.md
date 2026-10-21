@@ -17,7 +17,7 @@
 ![Buffer](https://img.shields.io/badge/buffer-10min_rolling-aaa9a0?style=flat-square&labelColor=0a0a0f)
 ![Plan](https://img.shields.io/badge/plan-workers_plus-aaa9a0?style=flat-square&labelColor=0a0a0f)
 
-A rolling black-box recorder for Atlas Systems. Once a minute it writes one frame: a trimmed hardware snapshot from [`specular-telemetry`](https://github.com/AtlasReaper311/specular-telemetry) plus everything that landed in [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer since the last tick, deploys included. When a `failure`-level event arrives, the recorder copies the entire buffer into a permanent incident before rotation can eat it, records two more frames of aftermath, and seals. The question it exists to answer is not "did something fail" (Discord already says so) but "what was the estate doing for the ten minutes before it did". The framing is borrowed deliberately from flight recorders and game replay systems; [`why-this-exists.md`](./why-this-exists.md) makes that connection explicit.
+A rolling black-box recorder for Atlas Systems. Once a minute it writes one frame: a trimmed hardware snapshot from [`specular-telemetry`](https://github.com/AtlasReaper311/specular-telemetry) plus everything that landed in [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer since the last tick, deploys included. When a `failure`-level event arrives, the recorder copies the entire buffer into an incident before rotation can eat it, records two more frames of aftermath, and seals. The recorder keeps its newest 50 incident rows; a reviewed and published postmortem is stored separately, so its page remains available after that incident row ages out. The question it exists to answer is not "did something fail" (Discord already says so) but "what was the estate doing for the ten minutes before it did". The framing is borrowed deliberately from flight recorders and game replay systems; [`why-this-exists.md`](./why-this-exists.md) makes that connection explicit.
 
 ## What a frame holds
 
@@ -31,6 +31,7 @@ All under `api.atlas-systems.uk/blackbox`, read-only routes open (the estate's o
 |---|---|
 | `GET /blackbox/incidents` | Recorded incidents, newest first: id, trigger, frame count, sealed |
 | `GET /blackbox/incidents/:id` | One incident: triggers plus the full frame window |
+| `GET /blackbox/incidents/:id/postmortem` | Published postmortem, retained separately from the rolling incident shelf |
 | `GET /blackbox/status` | Recorder heartbeat: buffer depth, last tick, alarm state |
 | `GET /blackbox/health` | Liveness |
 | `GET /blackbox/_meta` | The estate self-description contract |
