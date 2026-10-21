@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-const INCIDENT_ID = "inc-20260705-230335";
-const TITLE = "Blocked: atlas-systems.uk";
-const SEALED = "2026-07-05 23:03:35Z";
-const PUBLISHED_AT = "2026-07-30T17:32:21.780Z";
-const VERIFIER_PATH = fileURLToPath(new URL("../scripts/verify-published-postmortems.mjs", import.meta.url));
+const INCIDENT_ID = "inc-20990101-000001";
+const TITLE = "Synthetic postmortem title";
+const SEALED = "2099-01-01 00:00:01Z";
+const PUBLISHED_AT = "2099-01-02T03:04:05.678Z";
+const VERIFIER_SOURCE_PATH = fileURLToPath(new URL("../scripts/verify-published-postmortems.mjs", import.meta.url));
 
 function sendJson(response, status, body) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -17,6 +20,18 @@ function sendJson(response, status, body) {
 
 async function runVerifier({ retained = false, detailStatus = 200 } = {}) {
   let detailRequests = 0;
+  const tempRoot = await mkdtemp(join(tmpdir(), "atlas-blackbox-verifier-"));
+  const scriptDirectory = join(tempRoot, "scripts");
+  const postmortemDirectory = join(tempRoot, "postmortems");
+  const verifierPath = join(scriptDirectory, "verify-published-postmortems.mjs");
+  await mkdir(scriptDirectory, { recursive: true });
+  await mkdir(postmortemDirectory, { recursive: true });
+  await copyFile(VERIFIER_SOURCE_PATH, verifierPath);
+  await writeFile(join(postmortemDirectory, "manifest.json"), JSON.stringify({
+    [INCIDENT_ID]: { title: TITLE, sealed: SEALED, publishedAt: PUBLISHED_AT }
+  }));
+  await writeFile(join(postmortemDirectory, `${INCIDENT_ID}.html`), "<h2>Synthetic postmortem</h2>");
+
   const server = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -66,30 +81,34 @@ async function runVerifier({ retained = false, detailStatus = 200 } = {}) {
     sendJson(response, 404, { ok: false, error: "unexpected test URL" });
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [VERIFIER_PATH], {
-      env: {
-        ...process.env,
-        BLACKBOX_PUBLIC_BASE_URL: `http://127.0.0.1:${address.port}`,
-        BLACKBOX_VERIFY_ATTEMPTS: "1",
-        BLACKBOX_VERIFY_DELAY_MS: "0",
-        EXPECTED_BLACKBOX_VERSION: "1.0.2"
-      },
-      stdio: ["ignore", "pipe", "pipe"]
+  let result;
+  try {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [verifierPath], {
+        env: {
+          ...process.env,
+          BLACKBOX_PUBLIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          BLACKBOX_VERIFY_ATTEMPTS: "1",
+          BLACKBOX_VERIFY_DELAY_MS: "0",
+          EXPECTED_BLACKBOX_VERSION: "1.0.2"
+        },
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+      child.once("error", reject);
+      child.once("close", (code) => resolve({ code, stdout, stderr }));
     });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
-  });
-
-  await new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  });
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 
   return { ...result, detailRequests };
 }
