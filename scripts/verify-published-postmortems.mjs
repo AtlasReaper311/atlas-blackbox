@@ -93,14 +93,27 @@ async function verifyProduction(_manifest, entries, attempt) {
   const healthWithSlash = await fetchJson("/health/", attempt);
   assert(healthWithSlash.version === EXPECTED_VERSION, "trailing-slash health route is not normalised");
 
+  const incidentList = await fetchJson("/incidents", attempt);
+  assert(incidentList.ok === true, "incident list response is not ok");
+  assert(Array.isArray(incidentList.incidents), "incident list response has no incidents array");
+  const retainedIncidentIds = new Set(
+    incidentList.incidents
+      .filter((incident) => incident && typeof incident.id === "string")
+      .map((incident) => incident.id)
+  );
+
   for (const [id, entry] of entries) {
-    const detail = await fetchJson(`/incidents/${encodeURIComponent(id)}`, attempt);
-    assert(detail.ok === true, `${id} detail response is not ok`);
-    assert(detail.id === id, `${id} detail returned incident ${detail.id}`);
-    assert(detail.postmortemAssetsAvailable === true, `${id} detail reports unavailable postmortem assets`);
-    assert(detail.hasPostmortem === true, `${id} detail reports hasPostmortem=false`);
-    assert(detail.postmortemTitle === entry.title, `${id} detail title does not match manifest`);
-    assert(detail.postmortemPublishedAt === entry.publishedAt, `${id} detail publishedAt does not match manifest`);
+    // Recorder rows are deliberately limited to the newest 50 incidents.
+    // Published postmortem assets have a separate manifest and outlive that shelf.
+    if (retainedIncidentIds.has(id)) {
+      const detail = await fetchJson(`/incidents/${encodeURIComponent(id)}`, attempt);
+      assert(detail.ok === true, `${id} detail response is not ok`);
+      assert(detail.id === id, `${id} detail returned incident ${detail.id}`);
+      assert(detail.postmortemAssetsAvailable === true, `${id} detail reports unavailable postmortem assets`);
+      assert(detail.hasPostmortem === true, `${id} detail reports hasPostmortem=false`);
+      assert(detail.postmortemTitle === entry.title, `${id} detail title does not match manifest`);
+      assert(detail.postmortemPublishedAt === entry.publishedAt, `${id} detail publishedAt does not match manifest`);
+    }
 
     const published = await fetchJson(`/incidents/${encodeURIComponent(id)}/postmortem`, attempt);
     assert(published.ok === true, `${id} postmortem response is not ok`);
